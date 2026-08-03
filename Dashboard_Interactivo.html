@@ -69,6 +69,13 @@ header p{font-size:12px;opacity:.85;margin-top:3px;}
 .bulk-bar{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#eaf2fb;border-top:1px solid #d7e3ef;font-size:12px;}
 .bulk-bar .count{font-weight:600;color:var(--bg-header);}
 .row-check{width:16px;height:16px;}
+.fofa-toggle{display:flex;gap:8px;}
+.fofa-btn{flex:1;padding:9px 10px;border:1px solid #d7dbe0;border-radius:7px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-secondary);}
+.fofa-btn#btn-fo.active{background:#f8d7da;border-color:#c62828;color:#a71d2a;}
+.fofa-btn#btn-fa.active{background:#fff3cd;border-color:#e6a700;color:#8a6500;}
+.badge-fo{background:#f8d7da;color:#a71d2a;}
+.badge-fa{background:#fff3cd;color:#8a6500;}
+#card-cola .mini-btn.danger{background:var(--negative);color:#fff;}
 .empty-msg{color:var(--text-secondary);font-size:13px;padding:20px;text-align:center;}
 .loading{color:var(--text-secondary);font-size:13px;padding:20px;text-align:center;}
 footer{text-align:center;font-size:11px;color:var(--text-secondary);padding:14px 0;}
@@ -89,6 +96,7 @@ footer{text-align:center;font-size:11px;color:var(--text-secondary);padding:14px
 
   <section id="panel-reportar" class="panel active">
     <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-secondary);">1. Datos de la unidad (una sola vez)</div>
       <div class="form-grid">
         <div class="field">
           <label>Tu nombre (supervisor)</label>
@@ -122,6 +130,12 @@ footer{text-align:center;font-size:11px;color:var(--text-secondary);padding:14px
           <label>Flota</label>
           <input id="f-flota" placeholder="UM / TIS" value="UM">
         </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:var(--text-secondary);">2. Refacción faltante (agrega todas las que necesites antes de enviar)</div>
+      <div class="form-grid">
         <div class="field" style="grid-column:1/-1;">
           <label>Refacción faltante</label>
           <input list="lista-refacciones" id="f-descripcion" placeholder="Escribe o elige de la lista">
@@ -150,13 +164,32 @@ footer{text-align:center;font-size:11px;color:var(--text-secondary);padding:14px
             <option>BAJA</option>
           </select>
         </div>
+        <div class="field">
+          <label>Estatus operativo de la unidad</label>
+          <div class="fofa-toggle">
+            <button type="button" class="fofa-btn" id="btn-fo" onclick="setEstatusOperativo('FO')">FO · Fuera de operación</button>
+            <button type="button" class="fofa-btn" id="btn-fa" onclick="setEstatusOperativo('FA')">FA · Falla administrada</button>
+          </div>
+        </div>
         <div class="field" style="grid-column:1/-1;">
           <label>Observaciones (opcional)</label>
           <textarea id="f-observaciones"></textarea>
         </div>
       </div>
       <div class="submit-row">
-        <button class="btn" onclick="enviarRefaccion()">Registrar refacción</button>
+        <button class="btn secondary" onclick="agregarALaLista()">+ Agregar a la lista</button>
+        <span class="status-msg" id="add-status"></span>
+      </div>
+    </div>
+
+    <div class="card" id="card-cola" style="display:none;">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px;">3. Refacciones por enviar (<span id="cola-count">0</span>)</div>
+      <table class="data-table"><thead><tr>
+        <th>Descripción</th><th>Cant.</th><th>Unidad</th><th>Prioridad</th><th>Estatus</th><th></th>
+      </tr></thead><tbody id="cola-body"></tbody></table>
+      <div class="submit-row">
+        <button class="btn" onclick="enviarCola()">Enviar todas (<span id="cola-count-btn">0</span>)</button>
+        <button class="mini-btn danger" onclick="vaciarCola()">Vaciar lista</button>
         <span class="status-msg" id="submit-status"></span>
       </div>
     </div>
@@ -260,52 +293,117 @@ function cumpleMismoDia(row){
   return Math.round((entrega-pedido)/86400000) === 0 ? 'SI' : 'NO';
 }
 
-async function enviarRefaccion(){
-  const statusEl = document.getElementById('submit-status');
+// --- Zona horaria: siempre generar fechas en hora de Ciudad de México, nunca UTC ---
+function mxDateStr(d){
+  d = d || new Date();
+  return new Intl.DateTimeFormat('en-CA', {timeZone:'America/Mexico_City', year:'numeric', month:'2-digit', day:'2-digit'}).format(d);
+}
+function mxTimeStr(d){
+  d = d || new Date();
+  return new Intl.DateTimeFormat('es-MX', {timeZone:'America/Mexico_City', hour:'2-digit', minute:'2-digit', hour12:false}).format(d);
+}
+
+// --- FO / FA ---
+let ESTATUS_OP = '';
+function setEstatusOperativo(v){
+  ESTATUS_OP = (ESTATUS_OP === v) ? '' : v;
+  document.getElementById('btn-fo').classList.toggle('active', ESTATUS_OP==='FO');
+  document.getElementById('btn-fa').classList.toggle('active', ESTATUS_OP==='FA');
+}
+
+// --- Carrito de refacciones por sesión ---
+let COLA = [];
+
+function contextoValido(){
   const tad = document.getElementById('f-tad').value;
   const supervisor = document.getElementById('f-supervisor').value.trim();
   const pmx = document.getElementById('f-pmx').value.trim();
+  if(!supervisor || !tad || !pmx) return 'Falta: nombre, TAD o PMX de la unidad.';
+  if(tad === '18 DE MARZO' && !document.getElementById('f-proyecto').value) return 'Selecciona el proyecto (ATTIS o UM) para 18 de Marzo.';
+  return null;
+}
+
+function agregarALaLista(){
+  const statusEl = document.getElementById('add-status');
+  const errCtx = contextoValido();
+  if(errCtx){ statusEl.textContent = errCtx; statusEl.className = 'status-msg err'; return; }
+
   const descripcion = document.getElementById('f-descripcion').value.trim();
+  if(!descripcion){ statusEl.textContent = 'Escribe la refacción faltante.'; statusEl.className = 'status-msg err'; return; }
+  if(!ESTATUS_OP){ statusEl.textContent = 'Indica si la unidad está FO o FA.'; statusEl.className = 'status-msg err'; return; }
 
-  if(!supervisor || !tad || !pmx || !descripcion){
-    statusEl.textContent = 'Falta: nombre, TAD, PMX o descripción de la refacción.';
-    statusEl.className = 'status-msg err';
-    return;
-  }
-  if(tad === '18 DE MARZO' && !document.getElementById('f-proyecto').value){
-    statusEl.textContent = 'Selecciona el proyecto (ATTIS o UM) para 18 de Marzo.';
-    statusEl.className = 'status-msg err';
-    return;
-  }
-
-  const payload = {
-    Supervisor: supervisor,
-    TAD: tad,
-    Proyecto: document.getElementById('f-proyecto').value,
-    PMX: pmx,
-    Flota: document.getElementById('f-flota').value,
+  COLA.push({
     Descripcion: descripcion,
     Cantidad: document.getElementById('f-cantidad').value,
     Unidad: document.getElementById('f-unidad').value,
     Prioridad: document.getElementById('f-prioridad').value,
+    EstatusOperativo: ESTATUS_OP,
     Observaciones: document.getElementById('f-observaciones').value
+  });
+
+  document.getElementById('f-descripcion').value = '';
+  document.getElementById('f-cantidad').value = '';
+  document.getElementById('f-observaciones').value = '';
+  setEstatusOperativo(ESTATUS_OP); // limpia el toggle
+  statusEl.textContent = '✓ Agregada a la lista.';
+  statusEl.className = 'status-msg ok';
+  renderCola();
+}
+
+function quitarDeLista(i){
+  COLA.splice(i,1);
+  renderCola();
+}
+
+function renderCola(){
+  const card = document.getElementById('card-cola');
+  if(COLA.length === 0){ card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  document.getElementById('cola-count').textContent = COLA.length;
+  document.getElementById('cola-count-btn').textContent = COLA.length;
+  document.getElementById('cola-body').innerHTML = COLA.map((it,i)=>{
+    const opBadge = it.EstatusOperativo === 'FO' ? '<span class="badge badge-fo">FO</span>' : '<span class="badge badge-fa">FA</span>';
+    return `<tr><td>${it.Descripcion}</td><td>${it.Cantidad||'-'}</td><td>${it.Unidad}</td><td>${it.Prioridad}</td><td>${opBadge}</td><td><button type="button" class="mini-btn danger" onclick="quitarDeLista(${i})">Quitar</button></td></tr>`;
+  }).join('');
+}
+
+function vaciarCola(){
+  if(COLA.length && !confirm('¿Vaciar la lista de refacciones sin enviar?')) return;
+  COLA = [];
+  renderCola();
+}
+
+async function enviarCola(){
+  const statusEl = document.getElementById('submit-status');
+  const errCtx = contextoValido();
+  if(errCtx){ statusEl.textContent = errCtx; statusEl.className = 'status-msg err'; return; }
+  if(COLA.length === 0){ statusEl.textContent = 'No hay refacciones en la lista.'; statusEl.className = 'status-msg err'; return; }
+
+  const contexto = {
+    Supervisor: document.getElementById('f-supervisor').value.trim(),
+    TAD: document.getElementById('f-tad').value,
+    Proyecto: document.getElementById('f-proyecto').value,
+    PMX: document.getElementById('f-pmx').value.trim(),
+    Flota: document.getElementById('f-flota').value
   };
 
-  statusEl.textContent = 'Enviando...';
+  statusEl.textContent = 'Enviando ' + COLA.length + ' refacción(es)...';
   statusEl.className = 'status-msg';
   try{
-    await fetch(SCRIPT_URL, {
-      method:'POST',
-      mode:'no-cors',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify(payload)
-    });
-    statusEl.textContent = '✓ Refacción registrada correctamente.';
+    for(const item of COLA){
+      const payload = {...contexto, ...item};
+      await fetch(SCRIPT_URL, {
+        method:'POST',
+        mode:'no-cors',
+        headers:{'Content-Type':'text/plain;charset=utf-8'},
+        body: JSON.stringify(payload)
+      });
+    }
+    statusEl.textContent = '✓ ' + COLA.length + ' refacción(es) registrada(s) correctamente.';
     statusEl.className = 'status-msg ok';
+    COLA = [];
+    renderCola();
     document.getElementById('f-pmx').value = '';
-    document.getElementById('f-descripcion').value = '';
-    document.getElementById('f-cantidad').value = '';
-    document.getElementById('f-observaciones').value = '';
     setTimeout(cargarDatos, 1200);
   }catch(err){
     statusEl.textContent = 'Error al enviar: ' + err;
@@ -369,8 +467,7 @@ function toggleEntregaForm(idxs, ev, anchorId){
   tr.className = 'inline-form-row';
   tr.id = formId;
   const colCount = anchorRow.children.length;
-  const ahora = new Date();
-  const horaDefault = ahora.toTimeString().slice(0,5);
+  const horaDefault = mxTimeStr();
   const etiqueta = idList.length > 1 ? `Se marcarán <b>${idList.length} refacciones</b> como entregadas con estos mismos datos:` : '';
   tr.innerHTML = `<td colspan="${colCount}"><div class="inline-form">
     ${etiqueta ? `<div style="width:100%;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">${etiqueta}</div>` : ''}
@@ -394,7 +491,7 @@ async function confirmarEntregaLote(idList, btn){
   const hora = document.getElementById('hora-surte-g').value;
   const link = document.getElementById('evidencia-g').value.trim();
   if(!quienSurte){ alert('Escribe quién surtió la refacción.'); return; }
-  const hoy = new Date().toISOString().slice(0,10);
+  const hoy = mxDateStr();
   btn.disabled = true; btn.textContent = 'Guardando...';
   try{
     for(const idx of idList){
@@ -438,12 +535,14 @@ function renderAvance(){
   const abiertas = rows.filter(r=>r.Estatus!=='ENTREGADO');
   const avgRetraso = abiertas.length ? (abiertas.reduce((a,b)=>a+(b.dias||0),0)/abiertas.length) : 0;
   const criticas = rows.filter(r=>(r.dias||0)>=3 && r.Estatus!=='ENTREGADO').length;
+  const unidadesFO = new Set(abiertas.filter(r=>r.EstatusOperativo==='FO').map(r=>r.PMX)).size;
 
   document.getElementById('kpi-row').innerHTML = `
     <div class="kpi-card"><div class="kpi-label">Total partidas</div><div class="kpi-value">${total}</div></div>
     <div class="kpi-card bad"><div class="kpi-label">% Cumplimiento mismo día</div><div class="kpi-value">${pctCumple.toFixed(1)}%</div></div>
     <div class="kpi-card warn"><div class="kpi-label">Prom. días retraso (abiertas)</div><div class="kpi-value">${avgRetraso.toFixed(1)}</div></div>
     <div class="kpi-card bad"><div class="kpi-label">Críticas (&ge;3 días)</div><div class="kpi-value">${criticas}</div></div>
+    <div class="kpi-card bad"><div class="kpi-label">Unidades en FO</div><div class="kpi-value">${unidadesFO}</div></div>
   `;
 
   if(total===0){
@@ -471,14 +570,16 @@ function renderAvance(){
     if(g.maxRetraso>=3) cls='badge-red'; else if(g.maxRetraso>=1) cls='badge-yellow';
     const groupId = (g.tad+'_'+g.pmx).replace(/[^a-zA-Z0-9]/g,'');
     const pendientesGrupo = g.items.filter(x=>x.Estatus!=='ENTREGADO').length;
+    const tieneFO = g.items.some(x=>x.EstatusOperativo==='FO' && x.Estatus!=='ENTREGADO');
     html += `<details class="unit-group"${gi<3?' open':''}><summary>
       <span class="pmx">${g.pmx}</span>
       <span class="tad-tag">${g.tad}</span>
       <span>Flota: ${g.flota||'-'}</span>
       <span>${g.entregadas}/${g.total} entregadas</span>
       <span class="badge ${cls}">Máx. retraso: ${g.maxRetraso}d</span>
+      ${tieneFO ? '<span class="badge badge-fo">FO</span>' : ''}
     </summary><div class="unit-body"><table class="data-table"><thead><tr>
-      <th></th><th>Descripción</th><th>Cant.</th><th>Prioridad</th><th>Estatus</th><th>Días</th><th>Motivo</th><th>Reportó</th><th>Surtió / Evidencia</th><th></th>
+      <th></th><th>Descripción</th><th>Cant.</th><th>Prioridad</th><th>Operativo</th><th>Estatus</th><th>Días</th><th>Motivo</th><th>Reportó</th><th>Surtió / Evidencia</th><th></th>
     </tr></thead><tbody>`;
     g.items.sort((a,b)=>(b.dias||0)-(a.dias||0)).forEach(row=>{
       let dcls='badge-gray';
@@ -502,7 +603,9 @@ function renderAvance(){
         if(row.EvidenciaLink){ surtioCell += ` · <a class="link-badge" href="${row.EvidenciaLink}" target="_blank">ver evidencia</a>`; }
       }
 
-      html += `<tr id="row-${row._idx}"><td>${checkCell}</td><td>${row.Descripcion||'-'}</td><td>${row.Cantidad||'-'}</td><td>${row.Prioridad||'-'}</td><td>${row.Estatus||'-'}</td><td><span class="badge ${dcls}">${row.dias}</span></td><td>${motivoCell}</td><td>${row.Supervisor||'-'}</td><td>${surtioCell}</td><td>${acciones}</td></tr>`;
+      const opCell = row.EstatusOperativo === 'FO' ? '<span class="badge badge-fo">FO</span>' : (row.EstatusOperativo === 'FA' ? '<span class="badge badge-fa">FA</span>' : '<span class="badge badge-gray">-</span>');
+
+      html += `<tr id="row-${row._idx}"><td>${checkCell}</td><td>${row.Descripcion||'-'}</td><td>${row.Cantidad||'-'}</td><td>${row.Prioridad||'-'}</td><td>${opCell}</td><td>${row.Estatus||'-'}</td><td><span class="badge ${dcls}">${row.dias}</span></td><td>${motivoCell}</td><td>${row.Supervisor||'-'}</td><td>${surtioCell}</td><td>${acciones}</td></tr>`;
     });
     html += '</tbody></table>';
     if(pendientesGrupo > 1){
