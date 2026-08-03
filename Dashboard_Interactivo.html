@@ -344,8 +344,8 @@ function agregarALaLista(){
   document.getElementById('f-descripcion').value = '';
   document.getElementById('f-cantidad').value = '';
   document.getElementById('f-observaciones').value = '';
-  setEstatusOperativo(ESTATUS_OP); // limpia el toggle
-  statusEl.textContent = '✓ Agregada a la lista.';
+  // El estatus FO/FA se mantiene seleccionado: es de la unidad, no cambia entre refacciones de la misma captura.
+  statusEl.textContent = '✓ Agregada a la lista. Puedes seguir agregando más refacciones de esta unidad.';
   statusEl.className = 'status-msg ok';
   renderCola();
 }
